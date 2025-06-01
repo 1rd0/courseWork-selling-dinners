@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   telegram_bot:
     build: .
@@ -25,3 +27,6 @@ services:
     volumes:
       - ./models:/app/models
     command: python3 app/train_dialogues_model.py
+
+volumes:
+  models:

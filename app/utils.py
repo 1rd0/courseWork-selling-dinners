@@ -1,16 +1,9 @@
 # ./app/utils.py
 
 import logging
-import nltk
 from rapidfuzz import process, fuzz
 from data.config import CONFIG
-from natasha import (
-    Segmenter,
-    MorphVocab,
-    NewsEmbedding,
-    NewsMorphTagger,
-    Doc
-)
+from natasha import Segmenter, MorphVocab, NewsEmbedding, NewsMorphTagger, Doc
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -21,7 +14,6 @@ segmenter = Segmenter()
 morph_vocab = MorphVocab()
 emb = NewsEmbedding()
 morph_tagger = NewsMorphTagger(emb)
-
 
 # Загрузка тонального словаря
 def load_tonal_dict():
@@ -35,9 +27,7 @@ def load_tonal_dict():
         logger.error("Файл tonal_dict.txt не найден")
     return tonal_dict
 
-
 TONAL_DICT = load_tonal_dict()
-
 
 # Очистка фразы
 def clear_phrase(phrase):
@@ -46,7 +36,6 @@ def clear_phrase(phrase):
     phrase = phrase.lower()
     alphabet = '1234567890qwertyuiopasdfghjklzxcvbnmабвгдеёжзийклмнопрстуфхцчшщъыьэюя- '
     return ''.join(symbol for symbol in phrase if symbol in alphabet).strip()
-
 
 # Лемматизация и морфологический анализ
 def lemmatize_phrase(phrase):
@@ -64,7 +53,6 @@ def lemmatize_phrase(phrase):
         lemma = token.lemma if token.lemma else token.text
         lemmatized_words.append(lemma)
     return ' '.join(lemmatized_words)
-
 
 # Анализ тональности
 def analyze_sentiment(phrase):
@@ -87,26 +75,11 @@ def analyze_sentiment(phrase):
         return 'negative'
     return 'neutral'
 
-
 # Проверка на осмысленность текста
 def is_meaningful_text(text):
     text = clear_phrase(text)
     words = text.split()
     return any(len(word) > 2 and all(c in 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя' for c in word) for word in words)
-
-
-# Извлечение возраста
-def extract_age(replica):
-    replica = lemmatize_phrase(replica)
-    logger.info(f"Extracting age from: '{replica}'")
-    words = replica.split()
-    for i, word in enumerate(words):
-        if word.isdigit() and (i + 1 < len(words) and words[i + 1] in ['год', 'года', 'лет'] or 'для' in words[:i]):
-            logger.info(f"Found age: {word}")
-            return word
-    logger.info("Age not found")
-    return None
-
 
 # Извлечение цены
 def extract_price(replica):
@@ -117,49 +90,39 @@ def extract_price(replica):
     words = replica.split()
     for i, word in enumerate(words):
         if word.isdigit() and (
-                i + 1 < len(words) and words[i + 1] in ['рублей', 'руб'] or 'до' in words[:i] or 'дешевле' in words[
-                                                                                                              :i]):
+            i + 1 < len(words) and words[i + 1] in ['рублей', 'руб'] or 'до' in words[:i] or 'дешевле' in words[:i]):
             logger.info(f"Found price: {word}")
             return int(word)
     logger.info("Price not found")
     return None
 
-
-# Извлечение игрушки
-def extract_toy_name(replica):
+# Извлечение блюда
+def extract_dish_name(replica):
     replica = lemmatize_phrase(replica)
     if not replica:
         return None
-    # Проверяем точное совпадение с названиями игрушек
-    for toy in CONFIG['toys'].keys():
-        toy_lemmatized = lemmatize_phrase(toy)
-        if toy_lemmatized in replica:
-            return toy
+    # Проверяем точное совпадение с названиями блюд
+    for dish in CONFIG['dishes'].keys():
+        dish_lemmatized = lemmatize_phrase(dish)
+        if dish_lemmatized in replica:
+            return dish
     # Проверяем синонимы и нечёткое соответствие
-    for toy, data in CONFIG['toys'].items():
+    for dish, data in CONFIG['dishes'].items():
         synonyms_lemmatized = [lemmatize_phrase(syn) for syn in data.get('synonyms', [])]
         if any(syn in replica for syn in synonyms_lemmatized):
-            return toy
-        candidates = [toy] + data.get('synonyms', [])
+            return dish
+        candidates = [dish] + data.get('synonyms', [])
         best_match = process.extractOne(replica, candidates, scorer=fuzz.partial_ratio)
-        if best_match and best_match[1] > CONFIG['thresholds']['fuzzy_match_toy']:
-            return toy
-    # Специальная обработка для пазлов с числом элементов
-    words = replica.split()
-    for i, word in enumerate(words):
-        if word.isdigit() and (i + 1 < len(words) and words[i + 1] in ['элемент', 'элементов']) and 'пазл' in words:
-            puzzle_name = f"Пазл {word} элементов"
-            if puzzle_name in CONFIG['toys']:
-                return puzzle_name
+        if best_match and best_match[1] > CONFIG['thresholds']['fuzzy_match_dish']:
+            return dish
     return None
 
-
-# Извлечение категории
-def extract_toy_category(replica):
+# Извлечение категории блюда
+def extract_dish_category(replica):
     replica = lemmatize_phrase(replica)
     if not replica:
         return None
-    for toy, data in CONFIG['toys'].items():
+    for dish, data in CONFIG['dishes'].items():
         for category in data.get('categories', []):
             category_lemmatized = lemmatize_phrase(category)
             category_synonyms = data.get('category_synonyms', {}).get(category, [])
@@ -167,18 +130,6 @@ def extract_toy_category(replica):
             if category_lemmatized in replica or any(syn in replica for syn in synonyms_lemmatized):
                 return category
     return None
-
-
-# Проверка возраста в диапазоне
-def is_age_in_range(age, age_range):
-    try:
-        age = int(age)
-        min_age = age_range['min_age']
-        max_age = age_range['max_age']
-        return min_age <= age <= (max_age if max_age is not None else float('inf'))
-    except (ValueError, TypeError):
-        return False
-
 
 # Класс для управления статистикой
 class Stats:

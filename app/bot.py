@@ -14,22 +14,19 @@ from pydub import AudioSegment
 from dotenv import load_dotenv
 from data.config import CONFIG
 from sklearn.metrics.pairwise import cosine_similarity
-from utils import clear_phrase, is_meaningful_text, extract_age, extract_toy_name, extract_toy_category, extract_price, \
-    is_age_in_range, Stats, logger, lemmatize_phrase, analyze_sentiment
+from utils import clear_phrase, is_meaningful_text, extract_dish_name, extract_dish_category, extract_price, \
+    Stats, logger, lemmatize_phrase, analyze_sentiment
 from rapidfuzz import process, fuzz
 
 # Загрузка токена
 load_dotenv()
 TOKEN = os.getenv('TELEGRAM_TOKEN')
 
-
 # Состояния бота
 class BotState(Enum):
     NONE = "NONE"
-    WAITING_FOR_TOY = "WAITING_FOR_TOY"
-    WAITING_FOR_AGE = "WAITING_FOR_AGE"
+    WAITING_FOR_DISH = "WAITING_FOR_DISH"
     WAITING_FOR_INTENT = "WAITING_FOR_INTENT"
-
 
 # Намерения
 class Intent(Enum):
@@ -37,22 +34,20 @@ class Intent(Enum):
     BYE = "bye"
     YES = "yes"
     NO = "no"
-    TOY_TYPES = "toy_types"
-    TOY_PRICE = "toy_price"
-    TOY_AVAILABILITY = "toy_availability"
-    TOY_RECOMMENDATION = "toy_recommendation"
-    FILTER_TOYS = "filter_toys"
-    TOY_INFO = "toy_info"
-    ORDER_TOY = "order_toy"
-    COMPARE_TOYS = "compare_toys"
-
+    DISH_TYPES = "dish_types"
+    DISH_PRICE = "dish_price"
+    DISH_AVAILABILITY = "dish_availability"
+    DISH_RECOMMENDATION = "dish_recommendation"
+    FILTER_DISHES = "filter_dishes"
+    DISH_INFO = "dish_info"
+    ORDER_DISH = "order_dish"
+    COMPARE_DISHES = "compare_dishes"
 
 # Типы ответов
 class ResponseType(Enum):
     INTENT = "intent"
     GENERATE = "generate"
     FAILURE = "failure"
-
 
 # Класс бота
 class Bot:
@@ -76,7 +71,7 @@ class Bot:
     def _update_context(self, context, replica, answer, intent=None):
         """Обновляет контекст пользователя."""
         context.user_data.setdefault('state', BotState.NONE.value)
-        context.user_data.setdefault('current_toy', None)
+        context.user_data.setdefault('current_dish', None)
         context.user_data.setdefault('last_bot_response', None)
         context.user_data.setdefault('last_intent', None)
         context.user_data.setdefault('history', [])
@@ -108,86 +103,81 @@ class Bot:
             f"Classify intent: replica='{replica_lemmatized}', predicted='{intent}', best_intent='{best_intent}', score={best_score}")
         return best_intent or intent if best_score >= CONFIG['thresholds']['intent_score'] else None
 
-    def _get_toy_response(self, intent, toy_name, replica, context):
-        """Обрабатывает запросы, связанные с конкретной игрушкой."""
-        if toy_name not in CONFIG['toys']:
-            return "Извините, такой игрушки нет в каталоге."
+    def _get_dish_response(self, intent, dish_name, replica, context):
+        """Обрабатывает запросы, связанные с конкретным блюдом."""
+        if dish_name not in CONFIG['dishes']:
+            return "Извините, такого блюда нет в меню."
         responses = CONFIG['intents'][intent]['responses']
         answer = random.choice(responses)
-        toy_data = CONFIG['toys'][toy_name]
-        answer = answer.replace('[toy_name]', toy_name)
-        answer = answer.replace('[price]', str(toy_data['price']))
-        answer = answer.replace('[age]', f"{toy_data['age']['min_age']}-{toy_data['age']['max_age'] or 'и старше'}")
-        answer = answer.replace('[description]', toy_data.get('description', 'интересная игрушка'))
+        dish_data = CONFIG['dishes'][dish_name]
+        answer = answer.replace('[dish_name]', dish_name)
+        answer = answer.replace('[price]', str(dish_data['price']))
+        answer = answer.replace('[description]', dish_data.get('description', 'вкусное блюдо'))
 
         # Добавляем реакцию на тональность
         sentiment = analyze_sentiment(replica)
         if sentiment == 'positive':
             answer += " Рад, что вы в хорошем настроении! 😊"
         elif sentiment == 'negative':
-            answer += " Кажется, вы не в духе. Может, игрушка поднимет настроение? 😊"
+            answer += " Кажется, вы не в духе. Может, вкусное блюдо поднимет настроение? 😊"
 
         return f"{answer} Что ещё интересует?"
 
-    def _find_toy_by_context(self, replica, context):
-        """Ищет игрушку на основе контекста или категории."""
+    def _find_dish_by_context(self, replica, context):
+        """Ищет блюдо на основе контекста или категории."""
         last_response = context.user_data.get('last_bot_response', '')
         last_intent = context.user_data.get('last_intent', '')
-        toy_category = extract_toy_category(replica)
+        dish_category = extract_dish_category(replica)
 
         if last_response and 'Кстати, у нас есть' in last_response:
-            return extract_toy_name(last_response)
-        elif toy_category:
-            suitable_toys = [toy for toy, data in CONFIG['toys'].items() if toy_category in data.get('categories', [])]
-            return random.choice(suitable_toys) if suitable_toys else None
-        elif last_intent == Intent.TOY_TYPES.value:
+            return extract_dish_name(last_response)
+        elif dish_category:
+            suitable_dishes = [dish for dish, data in CONFIG['dishes'].items() if dish_category in data.get('categories', [])]
+            return random.choice(suitable_dishes) if suitable_dishes else None
+        elif last_intent == Intent.DISH_TYPES.value:
             for hist in context.user_data.get('history', [])[::-1]:
-                hist_toy = extract_toy_name(hist)
-                if hist_toy:
-                    return hist_toy
-                hist_category = extract_toy_category(hist)
+                hist_dish = extract_dish_name(hist)
+                if hist_dish:
+                    return hist_dish
+                hist_category = extract_dish_category(hist)
                 if hist_category:
-                    suitable_toys = [toy for toy, data in CONFIG['toys'].items() if
-                                     hist_category in data.get('categories', [])]
-                    if suitable_toys:
-                        return random.choice(suitable_toys)
+                    suitable_dishes = [dish for dish, data in CONFIG['dishes'].items() if
+                                       hist_category in data.get('categories', [])]
+                    if suitable_dishes:
+                        return random.choice(suitable_dishes)
         return None
 
-    def _handle_filter_toys(self, age, price, toy_category, context):
-        """Обрабатывает фильтрацию игрушек по возрасту, цене и категории."""
-        suitable_toys = [
-            toy for toy, data in CONFIG['toys'].items()
-            if (not age or is_age_in_range(age, data['age']))
-               and (not price or data['price'] <= price)
-               and (not toy_category or toy_category in data.get('categories', []))
+    def _handle_filter_dishes(self, price, dish_category, context):
+        """Обрабатывает фильтрацию блюд по цене и категории."""
+        suitable_dishes = [
+            dish for dish, data in CONFIG['dishes'].items()
+            if (not price or data['price'] <= price)
+               and (not dish_category or dish_category in data.get('categories', []))
         ]
-        recent_toys = [extract_toy_name(h) for h in context.user_data.get('history', [])]
-        suitable_toys = [t for t in suitable_toys if t not in recent_toys]
+        recent_dishes = [extract_dish_name(h) for h in context.user_data.get('history', [])]
+        suitable_dishes = [d for d in suitable_dishes if d not in recent_dishes]
 
-        if not suitable_toys:
+        if not suitable_dishes:
             conditions = []
-            if age:
-                conditions.append(f"возраста {age} лет")
             if price:
                 conditions.append(f"до {price} рублей")
-            if toy_category:
-                conditions.append(f"в категории {toy_category}")
-            return f"Извините, нет игрушек для {', '.join(conditions)}."
+            if dish_category:
+                conditions.append(f"в категории {dish_category}")
+            return f"Извините, нет блюд для {', '.join(conditions)}."
 
-        toys_list = ', '.join(suitable_toys)
-        if age and not price and not toy_category:
-            toy_name = random.choice(suitable_toys)
-            context.user_data['current_toy'] = toy_name
+        dishes_list = ', '.join(suitable_dishes)
+        if not price and not dish_category:
+            dish_name = random.choice(suitable_dishes)
+            context.user_data['current_dish'] = dish_name
             context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
-            return f"Для возраста {age} лет советую {toy_name}! Хотите узнать цену или описание?"
-        return f"Вот что нашлось: {toys_list}."
+            return f"Советую {dish_name}! Хотите узнать цену или состав?"
+        return f"Вот что нашлось: {dishes_list}."
 
     def get_answer_by_intent(self, intent, replica, context):
         """Генерирует ответ на основе намерения."""
-        toy_name = context.user_data.get('current_toy')
+        dish_name = context.user_data.get('current_dish')
         last_intent = context.user_data.get('last_intent', '')
-        toy_category = extract_toy_category(replica)
-        age = extract_age(replica)
+        dish_category = extract_dish_category(replica)
         price = extract_price(replica)
 
         if intent not in CONFIG['intents']:
@@ -203,75 +193,71 @@ class Bot:
         if sentiment == 'positive':
             sentiment_suffix = " Рад, что вы в хорошем настроении! 😊"
         elif sentiment == 'negative':
-            sentiment_suffix = " Кажется, вы не в духе. Давайте подберём что-то весёлое! 😊"
+            sentiment_suffix = " Кажется, вы не в духе. Давайте подберём что-то вкусное! 😊"
 
-        if intent in [Intent.TOY_PRICE.value, Intent.TOY_AVAILABILITY.value, Intent.TOY_INFO.value,
-                      Intent.ORDER_TOY.value]:
-            if not toy_name:
-                toy_name = self._find_toy_by_context(replica, context)
-                if toy_name:
-                    context.user_data['current_toy'] = toy_name
+        if intent in [Intent.DISH_PRICE.value, Intent.DISH_AVAILABILITY.value, Intent.DISH_INFO.value,
+                      Intent.ORDER_DISH.value]:
+            if not dish_name:
+                dish_name = self._find_dish_by_context(replica, context)
+                if dish_name:
+                    context.user_data['current_dish'] = dish_name
                     context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
-                    return f"Из {toy_category or 'игрушек'} есть {toy_name}. Хотите узнать цену, описание или наличие?{sentiment_suffix}"
-                context.user_data['state'] = BotState.WAITING_FOR_TOY.value
-                return f"Какую игрушку или категорию вы имеете в виду?{sentiment_suffix}"
-            return self._get_toy_response(intent, toy_name, replica, context)
+                    return f"Из {dish_category or 'блюд'} есть {dish_name}. Хотите узнать цену, состав или наличие?{sentiment_suffix}"
+                context.user_data['state'] = BotState.WAITING_FOR_DISH.value
+                return f"Какое блюдо или категорию вы имеете в виду?{sentiment_suffix}"
+            return self._get_dish_response(intent, dish_name, replica, context)
 
-        elif intent == Intent.TOY_RECOMMENDATION.value:
-            if age:
-                answer = self._handle_filter_toys(age, None, toy_category, context)
+        elif intent == Intent.DISH_RECOMMENDATION.value:
+            answer = self._handle_filter_dishes(None, dish_category, context)
+
+        elif intent == Intent.FILTER_DISHES.value:
+            if price or dish_category:
+                answer = self._handle_filter_dishes(price, dish_category, context)
             else:
-                context.user_data['state'] = BotState.WAITING_FOR_AGE.value
-                return f"Для какого возраста нужна игрушка?{sentiment_suffix}"
+                return f"Укажите цену или категорию для фильтрации.{sentiment_suffix}"
 
-        elif intent == Intent.FILTER_TOYS.value:
-            if age or price or toy_category:
-                answer = self._handle_filter_toys(age, price, toy_category, context)
-            else:
-                return f"Укажите возраст, цену или категорию для фильтрации.{sentiment_suffix}"
+        elif intent == Intent.DISH_TYPES.value:
+            categories = random.sample([cat for dish in CONFIG['dishes'].values() for cat in dish.get('categories', [])],
+                                       min(3, len(CONFIG['dishes'])))
+            dishes = random.sample(list(CONFIG['dishes'].keys()), min(2, len(CONFIG['dishes'])))
+            answer = f"У нас есть {', '.join(set(categories))} и блюда вроде {', '.join(dishes)}. Что интересно?{sentiment_suffix}"
+            context.user_data['current_dish'] = None
 
-        elif intent == Intent.TOY_TYPES.value:
-            categories = random.sample([cat for toy in CONFIG['toys'].values() for cat in toy.get('categories', [])],
-                                       min(3, len(CONFIG['toys'])))
-            toys = random.sample(list(CONFIG['toys'].keys()), min(2, len(CONFIG['toys'])))
-            answer = f"У нас есть {', '.join(set(categories))} и игрушки вроде {', '.join(toys)}. Что интересно?{sentiment_suffix}"
-            context.user_data['current_toy'] = None
-
-        elif intent == Intent.COMPARE_TOYS.value:
-            toy1 = random.choice(list(CONFIG['toys'].keys()))
-            toy2 = random.choice([t for t in CONFIG['toys'].keys() if t != toy1])
-            answer = answer.replace('[toy1]', toy1).replace('[toy2]', toy2)
-            context.user_data['current_toy'] = toy1
-            answer += f" Что интересует: {toy1} или {toy2}?{sentiment_suffix}"
+        elif intent == Intent.COMPARE_DISHES.value:
+            dish1 = random.choice(list(CONFIG['dishes'].keys()))
+            dish2 = random.choice([d for d in CONFIG['dishes'].keys() if d != dish1])
+            answer = answer.replace('[dish1]', dish1).replace('[dish2]', dish2)
+            context.user_data['current_dish'] = dish1
+            answer += f" Что интересует: {dish1} или {dish2}?{sentiment_suffix}"
 
         elif intent == Intent.YES.value:
             if last_intent == Intent.HELLO.value:
                 categories = random.sample(
-                    [cat for toy in CONFIG['toys'].values() for cat in toy.get('categories', [])],
-                    min(3, len(CONFIG['toys'])))
+                    [cat for dish in CONFIG['dishes'].values() for cat in dish.get('categories', [])],
+                    min(3, len(CONFIG['dishes'])))
                 answer = f"Отлично! У нас есть {', '.join(set(categories))}. Что хотите узнать?{sentiment_suffix}"
-            elif last_intent in [Intent.TOY_PRICE.value, Intent.TOY_INFO.value, Intent.TOY_AVAILABILITY.value,
-                                 Intent.ORDER_TOY.value]:
-                if toy_name:
-                    answer = f"Цена на {toy_name} — {CONFIG['toys'][toy_name]['price']} рублей. Что ещё интересует?{sentiment_suffix}"
+            elif last_intent in [Intent.DISH_PRICE.value, Intent.DISH_INFO.value, Intent.DISH_AVAILABILITY.value,
+                                 Intent.ORDER_DISH.value]:
+                if dish_name:
+                    answer = f"Цена на {dish_name} — {CONFIG['dishes'][dish_name]['price']} рублей. Что ещё интересует?{sentiment_suffix}"
                 else:
-                    answer = f"Назови игрушку, чтобы я рассказал подробнее!{sentiment_suffix}"
-            elif last_intent == Intent.TOY_TYPES.value:
-                toys = random.sample(list(CONFIG['toys'].keys()), min(2, len(CONFIG['toys'])))
-                answer = f"У нас есть {', '.join(toys)}. Назови одну, чтобы узнать больше!{sentiment_suffix}"
+                    answer = f"Назови блюдо, чтобы я рассказал подробнее!{sentiment_suffix}"
+            elif last_intent == Intent.DISH_TYPES.value:
+                dishes = random.sample(list(CONFIG['dishes'].keys()), min(2, len(CONFIG['dishes'])))
+                answer = f"У нас есть {', '.join(dishes)}. Назови одно, чтобы узнать больше!{sentiment_suffix}"
             elif last_intent == 'offtopic':
-                answer = f"Хорошо, давай продолжим! Хочешь узнать про игрушки?{sentiment_suffix}"
+                answer = f"Хорошо, давай продолжим! Хочешь узнать про блюда?{sentiment_suffix}"
             else:
-                answer = f"Хорошо, что интересует? Игрушки, цены или что-то ещё?{sentiment_suffix}"
+                answer = f"Хорошо, что интересует? Блюда, цены или что-то ещё?{sentiment_suffix}"
 
         elif intent == Intent.NO.value:
-            context.user_data['current_toy'] = None
+            context.user_data['current_dish'] = None
             context.user_data['state'] = BotState.NONE.value
-            answer = f"Хорошо, какую игрушку обсудим теперь?{sentiment_suffix}"
+            answer = f"Хорошо, какое блюдо обсудим теперь?{sentiment_suffix}"
 
-        if intent in [Intent.HELLO.value, Intent.TOY_TYPES.value] and random.random() < 0.2:
-            ad_toy = random.choice([t for t in CONFIG['toys'].keys() if t != toy_name])
-            answer += f" Кстати, у нас есть {ad_toy} — отличный выбор для детей {CONFIG['toys'][ad_toy]['age']['min_age']}-{CONFIG['toys'][ad_toy]['age']['max_age'] or 'и старше'}!{sentiment_suffix}"
+        if intent in [Intent.HELLO.value, Intent.DISH_TYPES.value] and random.random() < 0.2:
+            ad_dish = random.choice([d for d in CONFIG['dishes'].keys() if d != dish_name])
+            answer += f" Кстати, у нас есть {ad_dish} — отличный выбор для обеда!{sentiment_suffix}"
 
         context.user_data['last_intent'] = intent
         return answer
@@ -295,10 +281,10 @@ class Bot:
             if sentiment == 'positive':
                 answer += " Рад, что ты в хорошем настроении! 😊"
             elif sentiment == 'negative':
-                answer += " Кажется, ты не в духе. Может, игрушка поднимет настроение? 😊"
+                answer += " Кажется, ты не в духе. Может, вкусное блюдо поднимет настроение? 😊"
             if random.random() < 0.3:
-                ad_toy = random.choice(list(CONFIG['toys'].keys()))
-                answer += f" Кстати, у нас есть {ad_toy} — отличный выбор для детей {CONFIG['toys'][ad_toy]['age']['min_age']}-{CONFIG['toys'][ad_toy]['age']['max_age'] or 'и старше'}!"
+                ad_dish = random.choice(list(CONFIG['dishes'].keys()))
+                answer += f" Кстати, у нас есть {ad_dish} — отличный выбор для обеда!"
             context.user_data['last_intent'] = 'offtopic'
             return answer
         logger.info(f"No match in dialogues.txt for replica='{replica_lemmatized}'")
@@ -306,38 +292,38 @@ class Bot:
 
     def get_failure_phrase(self, replica):
         """Возвращает фразу при неудачном запросе с учетом тональности."""
-        toy_name = random.choice(list(CONFIG['toys'].keys()))
-        answer = random.choice(CONFIG['failure_phrases']).replace('[toy_name]', toy_name)
+        dish_name = random.choice(list(CONFIG['dishes'].keys()))
+        answer = random.choice(CONFIG['failure_phrases']).replace('[dish_name]', dish_name)
         sentiment = analyze_sentiment(replica)
         if sentiment == 'positive':
-            answer += " Ты в отличном настроении, давай найдем крутую игрушку! 😊"
+            answer += " Ты в отличном настроении, давай найдем вкусное блюдо! 😊"
         elif sentiment == 'negative':
-            answer += " Не переживай, давай подберем что-то интересное! 😊"
+            answer += " Не переживай, давай подберем что-то вкусное! 😊"
         return answer
 
     def _process_none_state(self, replica, context):
         """Обрабатывает состояние NONE."""
-        toy_name = extract_toy_name(replica)
-        if toy_name:
-            context.user_data['current_toy'] = toy_name
+        dish_name = extract_dish_name(replica)
+        if dish_name:
+            context.user_data['current_dish'] = dish_name
             context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
             sentiment = analyze_sentiment(replica)
-            suffix = " Рад, что ты в хорошем настроении! 😊" if sentiment == 'positive' else " Кажется, ты не в духе. Давай найдем что-то крутое? 😊" if sentiment == 'negative' else ""
-            return f"Вы имеете в виду {toy_name}? Хотите узнать цену, описание или наличие?{suffix}"
+            suffix = " Рад, что ты в хорошем настроении! 😊" if sentiment == 'positive' else " Кажется, ты не в духе. Давай найдем что-то вкусное? 😊" if sentiment == 'negative' else ""
+            return f"Вы имеете в виду {dish_name}? Хотите узнать цену, состав или наличие?{suffix}"
 
-        toy_category = extract_toy_category(replica)
-        if toy_category:
-            suitable_toys = [toy for toy, data in CONFIG['toys'].items() if toy_category in data.get('categories', [])]
-            if suitable_toys:
-                toy_name = random.choice(suitable_toys)
-                context.user_data['current_toy'] = toy_name
+        dish_category = extract_dish_category(replica)
+        if dish_category:
+            suitable_dishes = [dish for dish, data in CONFIG['dishes'].items() if dish_category in data.get('categories', [])]
+            if suitable_dishes:
+                dish_name = random.choice(suitable_dishes)
+                context.user_data['current_dish'] = dish_name
                 context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
                 sentiment = analyze_sentiment(replica)
-                suffix = " Ты в отличном настроении, давай продолжим! 😊" if sentiment == 'positive' else " Не грусти, найдем что-то классное! 😊" if sentiment == 'negative' else ""
-                return f"Из {toy_category} есть {toy_name}. Хотите узнать цену, описание или наличие?{suffix}"
+                suffix = " Ты в отличном настроении, давай продолжим! 😊" if sentiment == 'positive' else " Не грусти, найдем что-то вкусное! 😊" if sentiment == 'negative' else ""
+                return f"Из {dish_category} есть {dish_name}. Хотите узнать цену, состав или наличие?{suffix}"
             sentiment = analyze_sentiment(replica)
             suffix = " В хорошем настроении? Давай попробуем другую категорию! 😊" if sentiment == 'positive' else " Не переживай, попробуем другую категорию! 😊" if sentiment == 'negative' else ""
-            return f"У нас нет игрушек в категории {toy_category}. Попробуйте другую категорию!{suffix}"
+            return f"У нас нет блюд в категории {dish_category}. Попробуйте другую категорию!{suffix}"
 
         intent = self.classify_intent(replica)
         if intent:
@@ -345,68 +331,57 @@ class Bot:
 
         return self.generate_answer(replica, context) or self.get_failure_phrase(replica)
 
-    def _process_waiting_for_toy(self, replica, context):
-        """Обрабатывает состояние WAITING_FOR_TOY."""
-        toy_name = extract_toy_name(replica)
-        if toy_name:
-            context.user_data['current_toy'] = toy_name
+    def _process_waiting_for_dish(self, replica, context):
+        """Обрабатывает состояние WAITING_FOR_DISH."""
+        dish_name = extract_dish_name(replica)
+        if dish_name:
+            context.user_data['current_dish'] = dish_name
             context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
             sentiment = analyze_sentiment(replica)
-            suffix = " Отличное настроение, да? 😊" if sentiment == 'positive' else " Давай найдем что-то веселое! 😊" if sentiment == 'negative' else ""
-            return f"Вы имеете в виду {toy_name}? Хотите узнать цену, описание или наличие?{suffix}"
-        toy_category = extract_toy_category(replica)
-        if toy_category:
-            suitable_toys = [toy for toy, data in CONFIG['toys'].items() if toy_category in data.get('categories', [])]
-            if suitable_toys:
-                toy_name = random.choice(suitable_toys)
-                context.user_data['current_toy'] = toy_name
+            suffix = " Отличное настроение, да? 😊" if sentiment == 'positive' else " Давай найдем что-то вкусное! 😊" if sentiment == 'negative' else ""
+            return f"Вы имеете в виду {dish_name}? Хотите узнать цену, состав или наличие?{suffix}"
+        dish_category = extract_dish_category(replica)
+        if dish_category:
+            suitable_dishes = [dish for dish, data in CONFIG['dishes'].items() if dish_category in data.get('categories', [])]
+            if suitable_dishes:
+                dish_name = random.choice(suitable_dishes)
+                context.user_data['current_dish'] = dish_name
                 context.user_data['state'] = BotState.WAITING_FOR_INTENT.value
                 sentiment = analyze_sentiment(replica)
-                suffix = " В хорошем расположении духа? 😊" if sentiment == 'positive' else " Не грусти, найдем игрушку! 😊" if sentiment == 'negative' else ""
-                return f"Из {toy_category} есть {toy_name}. Хотите узнать цену, описание или наличие?{suffix}"
+                suffix = " В хорошем расположении духа? 😊" if sentiment == 'positive' else " Не грусти, найдем блюдо! 😊" if sentiment == 'negative' else ""
+                return f"Из {dish_category} есть {dish_name}. Хотите узнать цену, состав или наличие?{suffix}"
         sentiment = analyze_sentiment(replica)
         suffix = " Отлично, давай продолжим! 😊" if sentiment == 'positive' else " Не переживай, уточним! 😊" if sentiment == 'negative' else ""
-        return f"Пожалуйста, уточните название игрушки или категорию.{suffix}"
-
-    def _process_waiting_for_age(self, replica, context):
-        """Обрабатывает состояние WAITING_FOR_AGE."""
-        age = extract_age(replica)
-        if age:
-            context.user_data['state'] = BotState.NONE.value
-            return self._handle_filter_toys(age, None, None, context)
-        sentiment = analyze_sentiment(replica)
-        suffix = " В хорошем настроении? 😊" if sentiment == 'positive' else " Не переживай, уточним! 😊" if sentiment == 'negative' else ""
-        return f"Укажите возраст, например, '5 лет'.{suffix}"
+        return f"Пожалуйста, уточните название блюда или категорию.{suffix}"
 
     def _process_waiting_for_intent(self, replica, context):
         """Обрабатывает состояние WAITING_FOR_INTENT."""
-        # Проверяем, указана ли конкретная игрушка в запросе
-        toy_name = extract_toy_name(replica)
-        if toy_name and toy_name in CONFIG['toys']:
-            context.user_data['current_toy'] = toy_name
+        dish_name = extract_dish_name(replica)
+        if dish_name and dish_name in CONFIG['dishes']:
+            context.user_data['current_dish'] = dish_name
         else:
-            toy_name = context.user_data.get('current_toy', 'игрушку')
+            dish_name = context.user_data.get('current_dish', 'блюдо')
 
         intent = self.classify_intent(replica)
-        if intent in [Intent.TOY_PRICE.value, Intent.TOY_AVAILABILITY.value, Intent.TOY_INFO.value,
-                      Intent.ORDER_TOY.value]:
+        if intent in [Intent.DISH_PRICE.value, Intent.DISH_AVAILABILITY.value, Intent.DISH_INFO.value,
+                      Intent.ORDER_DISH.value]:
             context.user_data['state'] = BotState.NONE.value
-            return self._get_toy_response(intent, toy_name, replica, context)
+            return self._get_dish_response(intent, dish_name, replica, context)
         if intent == Intent.YES.value:
-            if toy_name:
+            if dish_name:
                 context.user_data['state'] = BotState.NONE.value
                 sentiment = analyze_sentiment(replica)
                 suffix = " Рад твоему настроению! 😊" if sentiment == 'positive' else " Давай поднимем настроение! 😊" if sentiment == 'negative' else ""
-                return f"Цена на {toy_name} — {CONFIG['toys'][toy_name]['price']} рублей. Что ещё интересует?{suffix}"
+                return f"Цена на {dish_name} — {CONFIG['dishes'][dish_name]['price']} рублей. Что ещё интересует?{suffix}"
         if intent == Intent.NO.value:
-            context.user_data['current_toy'] = None
+            context.user_data['current_dish'] = None
             context.user_data['state'] = BotState.NONE.value
             sentiment = analyze_sentiment(replica)
             suffix = " Отлично, продолжаем! 😊" if sentiment == 'positive' else " Не грусти, найдем другое! 😊" if sentiment == 'negative' else ""
-            return f"Хорошо, какую игрушку обсудим теперь?{suffix}"
+            return f"Хорошо, какое блюдо обсудим теперь?{suffix}"
         sentiment = analyze_sentiment(replica)
-        suffix = " В хорошем настроении? 😊" if sentiment == 'positive' else " Не переживай, найдем что-то классное! 😊" if sentiment == 'negative' else ""
-        return f"Что хотите узнать про {toy_name}: цену, описание или наличие?{suffix}"
+        suffix = " В хорошем настроении? 😊" if sentiment == 'positive' else " Не переживай, найдем что-то вкусное! 😊" if sentiment == 'negative' else ""
+        return f"Что хотите узнать про {dish_name}: цену, состав или наличие?{suffix}"
 
     def process(self, replica, context):
         """Обрабатывает запрос пользователя."""
@@ -417,12 +392,11 @@ class Bot:
             stats.add(ResponseType.FAILURE.value, replica, answer, context)
             return answer
 
-        age = extract_age(replica)
         price = extract_price(replica)
-        toy_category = extract_toy_category(replica)
-        if age or price:
-            answer = self._handle_filter_toys(age, price, toy_category, context)
-            self._update_context(context, replica, answer, Intent.FILTER_TOYS.value)
+        dish_category = extract_dish_category(replica)
+        if price:
+            answer = self._handle_filter_dishes(price, dish_category, context)
+            self._update_context(context, replica, answer, Intent.FILTER_DISHES.value)
             stats.add(ResponseType.INTENT.value, replica, answer, context)
             return answer
 
@@ -430,10 +404,8 @@ class Bot:
         logger.info(
             f"Processing: replica='{replica}', state='{state}', last_intent='{context.user_data.get('last_intent')}'")
 
-        if state == BotState.WAITING_FOR_TOY.value:
-            answer = self._process_waiting_for_toy(replica, context)
-        elif state == BotState.WAITING_FOR_AGE.value:
-            answer = self._process_waiting_for_age(replica, context)
+        if state == BotState.WAITING_FOR_DISH.value:
+            answer = self._process_waiting_for_dish(replica, context)
         elif state == BotState.WAITING_FOR_INTENT.value:
             answer = self._process_waiting_for_intent(replica, context)
         else:
@@ -444,7 +416,6 @@ class Bot:
             replica) else ResponseType.GENERATE.value if 'dialogues.txt' in answer else ResponseType.FAILURE.value,
                   replica, answer, context)
         return answer
-
 
 # Голос в текст
 def voice_to_text(voice_file):
@@ -470,7 +441,6 @@ def voice_to_text(voice_file):
         if os.path.exists('voice.wav'):
             os.remove('voice.wav')
 
-
 # Текст в голос
 def text_to_voice(text):
     if not text:
@@ -484,7 +454,6 @@ def text_to_voice(text):
         logger.error(f"Ошибка синтеза речи: {e}\n{traceback.format_exc()}")
         return None
 
-
 # Telegram-обработчики
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = CONFIG['start_message']
@@ -492,13 +461,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['last_intent'] = Intent.HELLO.value
     await update.message.reply_text(answer)
 
-
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     answer = CONFIG['help_message']
     context.user_data['last_bot_response'] = answer
     context.user_data['last_intent'] = 'help'
     await update.message.reply_text(answer)
-
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     stats = context.user_data.get('stats', {ResponseType.INTENT.value: 0, ResponseType.GENERATE.value: 0,
@@ -511,7 +478,6 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(answer)
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
     if not user_text:
@@ -522,7 +488,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot = context.bot_data.setdefault('bot', Bot())
     answer = bot.process(user_text, context)
     await update.message.reply_text(answer)
-
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     voice = update.message.voice
@@ -553,7 +518,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists('voice.ogg'):
             os.remove('voice.ogg')
 
-
 def run_bot():
     if not TOKEN:
         raise ValueError("TELEGRAM_TOKEN не найден")
@@ -565,7 +529,6 @@ def run_bot():
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     logger.info("Бот запускается...")
     app.run_polling()
-
 
 if __name__ == '__main__':
     run_bot()
